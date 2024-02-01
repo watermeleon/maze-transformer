@@ -144,6 +144,7 @@ class TrainConfig(SerializableDataclass):
         return self.optimizer(params, **self.optimizer_kwargs)
 
     batch_size: int = serializable_field(default=128)
+    num_epochs: int = serializable_field(default=1)
 
     dataloader_cfg: dict = serializable_field(  # type: ignore
         default_factory=lambda: dict(

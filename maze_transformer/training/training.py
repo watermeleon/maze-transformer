@@ -130,61 +130,70 @@ def train(
     model.train()
     logger.progress("Starting training")
 
-    for iteration, batch in enumerate(dataloader):
-        # forward pass
-        # ------------------------------
-        loss: SingleLoss
-        logits: Float[torch.Tensor, "batch pos d_vocab"]
-        logits, loss = model(batch, return_type="both")
+    # count how many training samples we have seen
+    n_samples_seen: int = 1
 
-        # backward pass
-        # ------------------------------
-        # Remove the last logit because it's the prediction for what comes after PATH_END (and so is meaningless)
-        # Do this after computing loss because the loss_fn already ignores the last logit
-        logits = logits[:, :-1, :]
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
+    num_epochs: int = cfg.train_cfg.num_epochs
+    print(f"num_epochs = {num_epochs}")
+    for epoch in range(num_epochs):
+        print(f"epoch = {epoch}, num_epochs = {num_epochs}")
+        for iteration, batch in enumerate(dataloader):
+            # forward pass
+            # ------------------------------
+            loss: SingleLoss
+            logits: Float[torch.Tensor, "batch pos d_vocab"]
+            logits, loss = model(batch, return_type="both")
 
-        # log metrics
-        # ------------------------------
-        metrics: dict[str, int | float | StatCounter] = {"loss": float(loss)}
+            # backward pass
+            # ------------------------------
+            # Remove the last logit because it's the prediction for what comes after PATH_END (and so is meaningless)
+            # Do this after computing loss because the loss_fn already ignores the last logit
+            logits = logits[:, :-1, :]
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            n_samples_seen += len(batch)
 
-        if evals_enabled:
-            for interval_key, evals_dict in PathEvals.PATH_EVALS_MAP.items():
-                if iteration % intervals[interval_key] == 0:
-                    logger.progress(f"Running evals: {interval_key}")
-                    scores: dict[str, StatCounter] = evaluate_model(
-                        model=model,
-                        dataset=val_dataset,
-                        dataset_tokens=val_dataset_tokens,
-                        eval_functions=evals_dict,
-                        batch_size=cfg.train_cfg.batch_size,
-                        max_new_tokens=cfg.train_cfg.evals_max_new_tokens,
-                    )
-                    metrics.update(scores)
-        logger.log_metric_hist(metrics)
+            # log metrics
+            # ------------------------------
+            metrics: dict[str, int | float | StatCounter] = {"loss": float(loss)}
 
-        if iteration % intervals["print_loss"] == 0:
-            logger.progress(
-                f"iteration {iteration}/{n_batches}: loss={loss.item():.3f}"
-            )
+            if evals_enabled:
+                for interval_key, evals_dict in PathEvals.PATH_EVALS_MAP.items():
+                    if iteration % intervals[interval_key] == 0:
+                        logger.progress(f"Running evals: {interval_key}")
+                        scores: dict[str, StatCounter] = evaluate_model(
+                            model=model,
+                            dataset=val_dataset,
+                            dataset_tokens=val_dataset_tokens,
+                            eval_functions=evals_dict,
+                            batch_size=cfg.train_cfg.batch_size,
+                            max_new_tokens=cfg.train_cfg.evals_max_new_tokens,
+                        )
+                        scores["n_samples_seen"] = n_samples_seen	
+                        metrics.update(scores)
+            logger.log_metric_hist(metrics)
 
-        del loss
+            if iteration % intervals["print_loss"] == 0:
+                logger.progress(
+                    f"iteration {iteration}/{n_batches}: loss={loss.item():.3f}"
+                )
 
-        # checkpoints
-        # ------------------------------
-        if iteration % intervals["checkpoint"] == 0:
-            model_save_path: Path = (
-                output_dir
-                / TRAIN_SAVE_FILES.checkpoints
-                / TRAIN_SAVE_FILES.model_checkpt_zanj(iteration)
-            )
-            logger.progress(f"Saving model checkpoint to {model_save_path.as_posix()}")
-            zanj.save(model, model_save_path)
-            logger.upload_model(
-                model_save_path, aliases=["latest", f"iter-{iteration}"]
-            )
+            del loss
+
+            # checkpoints
+            # ------------------------------
+            if iteration % intervals["checkpoint"] == 0:
+                model_save_path: Path = (
+                    output_dir
+                    / TRAIN_SAVE_FILES.checkpoints
+                    / TRAIN_SAVE_FILES.model_checkpt_zanj(iteration)
+                )
+                logger.progress(f"Saving model checkpoint to {model_save_path.as_posix()}")
+                zanj.save(model, model_save_path)
+                logger.upload_model(
+                    model_save_path, aliases=["latest", f"iter-{iteration}"]
+                )
 
     # save the final model
     # ==============================
