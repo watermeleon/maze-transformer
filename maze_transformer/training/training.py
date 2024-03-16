@@ -134,10 +134,12 @@ def train(
     n_samples_seen: int = 1
 
     num_epochs: int = cfg.train_cfg.num_epochs
+    from tqdm import tqdm
     print(f"num_epochs = {num_epochs}")
+    print("intervals is:", intervals)
     for epoch in range(num_epochs):
         print(f"epoch = {epoch}, num_epochs = {num_epochs}")
-        for iteration, batch in enumerate(dataloader):
+        for iteration, batch in enumerate(tqdm(dataloader)):
             # forward pass
             # ------------------------------
             loss: SingleLoss
@@ -156,22 +158,22 @@ def train(
 
             # log metrics
             # ------------------------------
-            metrics: dict[str, int | float | StatCounter] = {"loss": float(loss)}
+            metrics: dict[str, int | float | StatCounter] = {"loss": float(loss), "n_samples_seen": n_samples_seen}
 
-            if evals_enabled:
-                for interval_key, evals_dict in PathEvals.PATH_EVALS_MAP.items():
-                    if iteration % intervals[interval_key] == 0:
-                        logger.progress(f"Running evals: {interval_key}")
-                        scores: dict[str, StatCounter] = evaluate_model(
-                            model=model,
-                            dataset=val_dataset,
-                            dataset_tokens=val_dataset_tokens,
-                            eval_functions=evals_dict,
-                            batch_size=cfg.train_cfg.batch_size,
-                            max_new_tokens=cfg.train_cfg.evals_max_new_tokens,
-                        )
-                        scores["n_samples_seen"] = n_samples_seen	
-                        metrics.update(scores)
+            # if evals_enabled:
+            #     for interval_key, evals_dict in PathEvals.PATH_EVALS_MAP.items():
+            #         if iteration % intervals[interval_key] == 0:
+            #             logger.progress(f"Running evals: {interval_key}")
+            #             scores: dict[str, StatCounter] = evaluate_model(
+            #                 model=model,
+            #                 dataset=val_dataset,
+            #                 dataset_tokens=val_dataset_tokens,
+            #                 eval_functions=evals_dict,
+            #                 batch_size=cfg.train_cfg.batch_size,
+            #                 max_new_tokens=cfg.train_cfg.evals_max_new_tokens,
+            #             )
+            #             scores["n_samples_seen"] = n_samples_seen	
+            #             metrics.update(scores)
             logger.log_metric_hist(metrics)
 
             if iteration % intervals["print_loss"] == 0:
@@ -194,6 +196,27 @@ def train(
                 logger.upload_model(
                     model_save_path, aliases=["latest", f"iter-{iteration}"]
                 )
+
+
+
+
+        # store the different interval metrics after each epoch
+        metrics: dict[str, int | float | StatCounter] = {"n_samples_seen": n_samples_seen, "epoch": epoch}
+
+        for interval_key, evals_dict in PathEvals.PATH_EVALS_MAP.items():
+            logger.progress(f"Running evals: {interval_key}")
+            scores: dict[str, StatCounter] = evaluate_model(
+                model=model,
+                dataset=val_dataset,
+                dataset_tokens=val_dataset_tokens,
+                eval_functions=evals_dict,
+                batch_size=cfg.train_cfg.batch_size,
+                max_new_tokens=cfg.train_cfg.evals_max_new_tokens,
+            )
+            scores["n_samples_seen"] = n_samples_seen	
+            metrics.update(scores)
+            print("for interval_key", interval_key, "scores are", scores)
+        logger.log_metric_hist(metrics)
 
     # save the final model
     # ==============================
