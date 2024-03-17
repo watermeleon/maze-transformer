@@ -49,6 +49,20 @@ def get_dataloader(
     return dataloader
 
 
+
+def get_bin_mask(tokens, special_token_id):
+    # Step 1: Create a boolean mask for the special token
+    special_token_mask = tokens == special_token_id
+
+    special_token_mask_float = special_token_mask.float()
+    special_token_indices = torch.argmax(special_token_mask_float, dim=1) - 1
+    binary_mask = torch.zeros_like(tokens, dtype=torch.float)
+    range_tensor = torch.arange(tokens.size(1), device=tokens.device).expand_as(tokens)
+    binary_mask[range_tensor > special_token_indices.unsqueeze(1)] = 1
+    return binary_mask
+
+
+
 def train(
     cfg: ConfigHolder,
     dataloader: DataLoader,
@@ -137,6 +151,38 @@ def train(
     from tqdm import tqdm
     print(f"num_epochs = {num_epochs}")
     print("intervals is:", intervals)
+    # exampe of item in batch: '<ADJLIST_START> (4,5) <--> (3,5) ; (3,2) <--> (3,1) ; (3,3) <--> (2,3) ; (4,4) <--> (3,4) ; (1,0) <--> (0,0) ; (3,2) <--> (2,2) ; (0,1) <--> (1,1) ; (3,1) <--> (2,1) ; (1,4) <--> (2,4) ; (1,4) <--> (1,3) ; (2,1) <--> (2,0) ; (2,0) <--> (1,0) ; (2,4) <--> (2,5) ; (1,2) <--> (2,2) ; (0,0) <--> (0,1) ; (1,2) <--> (1,3) ; (3,4) <--> (3,3) ; (3,5) <--> (2,5) ; (4,4) <--> (4,5) ; <ADJLIST_END> <ORIGIN_START> (4,4) <ORIGIN_END> <TARGET_START> (2,2) <TARGET_END> <PATH_START> (4,4) (4,5) (3,5) (2,5) (2,4) (1,4) (1,3) (1,2) (2,2) <PATH_END>'
+    example_item = '<ADJLIST_START> (4,5) <--> (3,5) ; (3,2) <--> (3,1) ; (3,3) <--> (2,3) ; (4,4) <--> (3,4) ; (1,0) <--> (0,0) ; (3,2) <--> (2,2) ; (0,1) <--> (1,1) ; (3,1) <--> (2,1) ; (1,4) <--> (2,4) ; (1,4) <--> (1,3) ; (2,1) <--> (2,0) ; (2,0) <--> (1,0) ; (2,4) <--> (2,5) ; (1,2) <--> (2,2) ; (0,0) <--> (0,1) ; (1,2) <--> (1,3) ; (3,4) <--> (3,3) ; (3,5) <--> (2,5) ; (4,4) <--> (4,5) ; <ADJLIST_END> <ORIGIN_START> (4,4) <ORIGIN_END> <TARGET_START> (2,2) <TARGET_END> <PATH_START> (4,4) (4,5) (3,5) (2,5) (2,4) (1,4) (1,3) (1,2) (2,2) <PATH_END>'
+    path_start_index = example_item.split(" ").index("<PATH_START>")
+    print("path_start_index", path_start_index)
+    loss_update_from_pathstart: bool = cfg.train_cfg.loss_update_from_pathstart is True
+    if loss_update_from_pathstart is True:
+        from jaxtyping import Float, Int
+        import transformer_lens.utils as utils
+
+        def loss_fn_cutoff(
+            logits: Float[torch.Tensor, "batch pos d_vocab"],
+            tokens: Int[torch.Tensor, "batch pos"],
+            per_token: bool = False,
+            ):
+            """
+            Wrapper around utils.lm_cross_entropy_loss, used in forward() with return_type=="loss" or "both".
+            """
+            if tokens.device != logits.device:
+                tokens = tokens.to(logits.device)
+
+            # print("I am messing with the loss")
+            binary_mask = get_bin_mask(tokens, 6)
+            binary_mask = binary_mask[: , :-1]
+
+            loss =  utils.lm_cross_entropy_loss(logits, tokens, True)
+            loss = loss * binary_mask
+            return loss.mean()
+        model.loss_fn = loss_fn_cutoff
+
+
+    print("loss_update_from_pathstart", loss_update_from_pathstart)
+
     for epoch in range(num_epochs):
         print(f"epoch = {epoch}, num_epochs = {num_epochs}")
         for iteration, batch in enumerate(tqdm(dataloader)):
@@ -151,6 +197,9 @@ def train(
             # Remove the last logit because it's the prediction for what comes after PATH_END (and so is meaningless)
             # Do this after computing loss because the loss_fn already ignores the last logit
             logits = logits[:, :-1, :]
+            # get the logits only after path start index
+            if loss_update_from_pathstart:
+                logits = logits[:, path_start_index:, :]
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()

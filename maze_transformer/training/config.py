@@ -128,6 +128,10 @@ class TrainConfig(SerializableDataclass):
         default=None,
         loading_fn=lambda data: data.get("validation_dataset_cfg", None),
     )
+    loss_update_from_pathstart: bool = serializable_field(
+        default=False,
+        loading_fn=lambda data: data.get("loss_update_from_pathstart", False),
+    )
 
     optimizer: Type[torch.optim.Optimizer] = serializable_field(  # type: ignore
         default_factory=lambda: torch.optim.RMSprop,
@@ -263,6 +267,7 @@ class TrainConfig(SerializableDataclass):
                 )
                 else self.validation_dataset_cfg.summary()
             ),
+            loss_update_from_pathstart=self.loss_update_from_pathstart,
         )
 
 
